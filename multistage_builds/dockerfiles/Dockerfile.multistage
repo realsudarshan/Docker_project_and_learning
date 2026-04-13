@@ -1,0 +1,42 @@
+# ── Stage 1: builder ──────────────────────────────────────
+# This stage's only job is to compile TypeScript → JavaScript
+# Everything installed here is temporary — it never reaches the final image
+# AS builder gives this stage a name so Stage 2 can reference it
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+COPY package*.json ./
+COPY tsconfig.json ./
+
+# Install everything including devDependencies
+# We NEED typescript here to compile — that's the only reason devDeps are installed
+RUN npm ci
+
+COPY src/ ./src/
+
+# Compile — produces dist/ folder
+# After this line, dist/index.js exists inside the builder stage
+RUN npm run build
+
+
+# ── Stage 2: runner ───────────────────────────────────────
+# Fresh start — this image has zero knowledge of Stage 1's filesystem
+# It's as if Stage 1 never existed, except for what we explicitly copy over
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+COPY package*.json ./
+
+# Only production deps — typescript, ts-node-dev, @types/* are never installed here
+# This node_modules is clean, small, runtime-only
+RUN npm ci --omit=dev
+
+# The only thing we take from Stage 1 — the compiled output
+# typescript compiler, src/, npm cache, all of Stage 1 is discarded
+# COPY --from=builder reaches into Stage 1's filesystem surgically
+COPY --from=builder /app/dist ./dist
+
+EXPOSE 3000
+CMD ["node", "dist/index.js"]

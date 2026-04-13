@@ -1,0 +1,43 @@
+# Same Node.js runtime but on Alpine Linux instead of Debian
+# Alpine is a minimal distro — no Python, no git, no build tools
+# Just the OS essentials + Node.js runtime
+# ~130MB vs ~950MB for node:20
+FROM node:20-alpine
+
+WORKDIR /app
+
+# ✅ Copy package files FIRST before any source code
+# Docker caches this layer separately
+# npm install only re-runs when package.json or package-lock.json changes
+# If you only change index.ts — this layer is a cache hit, npm install is skipped
+COPY package*.json ./
+
+# Copy tsconfig separately for the same reason
+# It changes less often than source code
+COPY tsconfig.json ./
+
+# npm ci instead of npm install
+# ci = clean install — reads exactly from package-lock.json
+# Fails if lockfile is out of sync with package.json (catches errors early)
+# Faster and deterministic — always produces the same node_modules
+# Still installs devDependencies here because we need tsc to compile
+RUN npm ci
+
+# Copy source AFTER installing deps
+# Now a change in index.ts only invalidates from this layer onward
+# The npm ci layer above stays cached
+COPY src/ ./src/
+
+# Compile TypeScript → JavaScript into dist/
+RUN npm run build
+
+# Remove devDependencies from node_modules in place
+# typescript, ts-node-dev, @types/* are deleted from the filesystem
+# ⚠️ BUT they still exist in the layer history above
+# Docker layers are additive — you can't truly delete something from a previous layer
+# The image size doesn't shrink as much as you'd expect because of this
+# This is the core limitation that multistage solves properly
+RUN npm prune --omit=dev
+
+EXPOSE 3000
+CMD ["node", "dist/index.js"]

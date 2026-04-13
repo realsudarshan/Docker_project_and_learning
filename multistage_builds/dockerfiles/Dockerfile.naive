@@ -1,0 +1,55 @@
+# Base image: official Node.js 20 on Debian Linux
+# This is the "batteries included" image — comes with Python, git,
+# build tools, package managers, and a full OS (~950MB before your app)
+# Good for getting started, bad for production (huge attack surface)
+FROM node:20
+
+# Set the working directory inside the container
+# All subsequent commands (COPY, RUN, CMD) operate relative to this path
+# Creates the directory if it doesn't exist
+# Think of it as: cd /app, but permanent for this image
+WORKDIR /app
+
+# Copy everything from build context (./app on your machine) into /app in container
+# Build context = the folder you pass at the end of docker build command
+#   docker build ... ./app  ← this is the build context
+#
+# ⚠️ Problem 1 — cache busting:
+#   Docker caches each instruction as a layer.
+#   Since we copy source code BEFORE npm install, any file change
+#   (even a comment in index.ts) invalidates the npm install cache.
+#   Next build = full npm install from scratch every time.
+#
+# ⚠️ Problem 2 — copying node_modules:
+#   If .dockerignore is missing, your local node_modules folder
+#   gets copied in too (can be hundreds of MB of unnecessary files)
+COPY . .
+
+# Run npm install inside the container
+# Installs ALL dependencies — both dependencies AND devDependencies
+# That means typescript, ts-node-dev, @types/* all land in the final image
+# even though they are never used after compilation
+#
+# ⚠️ No --omit=dev flag = dev tools bloat the final image
+RUN npm install
+
+# Compile TypeScript to JavaScript
+# Reads tsconfig.json, compiles src/ → dist/
+# After this runs, dist/index.js exists inside the container
+#
+# ⚠️ The typescript compiler (~80MB) stays in the image after this
+#   It did its job but there's no way to remove it in this approach
+#   without multi-stage builds
+RUN npm run build
+
+# Document that the container listens on port 3000
+# This is metadata only — it does NOT actually publish the port
+# You still need -p 3000:3000 in docker run to access it from your machine
+EXPOSE 3000
+
+# The command that runs when the container starts
+# Runs the compiled output, not the TypeScript source
+# Uses exec form (JSON array) instead of shell form ("node dist/index.js")
+# Exec form is preferred — the process runs directly, not inside /bin/sh
+# so signals like SIGTERM reach your Node process properly (clean shutdowns)
+CMD ["node", "dist/index.js"]
