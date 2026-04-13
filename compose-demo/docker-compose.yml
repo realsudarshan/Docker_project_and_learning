@@ -1,0 +1,178 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# docker-compose.yml — Full-stack app with healthchecks, profiles, and volumes
+#
+# Start (default):     docker compose up -d
+# Start (with tools):  docker compose --profile dev up -d
+# Stop:                docker compose down
+# Stop + wipe data:    docker compose down -v
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Postgres ───────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    # alpine = minimal Linux base, much smaller than the default Debian image
+
+    volumes:
+      # Named volume — data is stored in Docker-managed storage on your machine
+      # Survives docker compose down, only deleted by docker compose down -v
+      # Without this, every restart wipes your entire database
+      - postgres_data:/var/lib/postgresql/data
+      # /var/lib/postgresql/data is where Postgres stores all its files internally
+
+    environment:
+      # These env vars are read by the official Postgres image on first startup
+      # to create the initial user, password, and database
+      # Values come from .env file in the project root (loaded automatically by Compose)
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+
+    healthcheck:
+      # pg_isready checks if Postgres is accepting connections
+      # -U = user, -d = database to check against
+      # Docker runs this command inside the container on a schedule
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+
+      # How often to run the check
+      interval: 5s
+
+      # How long to wait for the command to respond before marking it failed
+      timeout: 5s
+
+      # How many consecutive failures before marking container as unhealthy
+      retries: 5
+
+      # How long to wait before running the first check after container starts
+      # Gives Postgres time to begin initializing before we even start probing
+      start_period: 10s
+
+    # No ports: section here intentionally
+    # Postgres is only reachable from inside the Compose network
+    # Other services connect via hostname 'postgres' (the service name)
+    # Exposing DB ports to the host machine is a security risk in production
+
+    networks:
+      - app-network
+
+  # ── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+
+    volumes:
+      # Redis can persist data to disk (RDB snapshots)
+      # Without this volume, cache is lost on restart (sometimes acceptable)
+      - redis_data:/data
+
+    healthcheck:
+      # redis-cli ping → responds with PONG when Redis is ready
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+    # No ports exposed — internal only, accessed via hostname 'redis'
+
+    networks:
+      - app-network
+
+  # ── API ────────────────────────────────────────────────────────────────────
+  api:
+    build:
+      # context = folder sent to Docker as the build context
+      context: ./api
+      # dockerfile = which Dockerfile to use inside that context
+      dockerfile: Dockerfile
+
+    # env_file loads every line from .env as an environment variable
+    # Cleaner than listing each variable under environment: individually
+    # The API reads PG_HOST, PG_USER, REDIS_HOST etc. from here at runtime
+    env_file: .env
+
+    ports:
+      # host:container — port 3001 on your machine maps to port 3001 in container
+      - "3001:3001"
+
+    depends_on:
+      # This is the critical part — 'condition: service_healthy' means
+      # the api container will not start until postgres passes its healthcheck
+      # Without 'condition', depends_on only waits for container creation,
+      # not for the database to actually be ready to accept connections
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    networks:
+      - app-network
+
+  # ── Web (Next.js) ──────────────────────────────────────────────────────────
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+
+    ports:
+      - "3000:3000"
+
+    depends_on:
+      # Web only needs the API to be started (not necessarily healthy)
+      # service_started is the default when no condition is specified
+      - api
+
+    networks:
+      - app-network
+
+  # ── pgAdmin ────────────────────────────────────────────────────────────────
+  pgadmin:
+    image: dpage/pgadmin4
+
+    # profiles means this service is INVISIBLE to plain 'docker compose up'
+    # It only starts when you explicitly activate the profile:
+    #   docker compose --profile dev up -d
+    # Use profiles for dev tools, test runners, seed scripts — anything
+    # you want available in development but never in production
+    profiles: ["dev"]
+
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+
+    ports:
+      - "5050:80"
+      # pgAdmin runs on port 80 inside the container
+      # We map it to 5050 on the host to avoid conflicts
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    networks:
+      - app-network
+
+# ── Volumes ───────────────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    # Docker creates and manages this volume automatically
+    # Stored at: /var/lib/docker/volumes/compose-demo_postgres_data/_data
+    # Listed here at the top level so Compose knows to create it on startup
+
+  redis_data:
+    # Same — Docker-managed, persists across container restarts
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  app-network:
+    driver: bridge
+    # Custom bridge network — same as what we created manually in Project 2
+    # with: docker network create --driver bridge app-network
+    #
+    # Compose creates this network automatically when the stack starts
+    # and removes it on docker compose down
+    #
+    # Every service on this network can reach others by service name as hostname:
+    #   postgres → resolves to postgres container IP
+    #   redis    → resolves to redis container IP
+    #   api      → resolves to api container IP
+    # This is Docker's built-in DNS resolution on custom bridge networks
