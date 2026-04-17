@@ -1,0 +1,36 @@
+services:
+  api:
+    build:
+      context: ./api
+      dockerfile: dockerfiles/Dockerfile.dev
+    ports:
+      - "3000:3000"
+    # develop.watch is what powers docker compose watch
+    develop:
+      watch:
+        # ACTION 1: sync
+        # When any .ts file changes in src/, copy it straight into
+        # the running container at /app/src/
+        # ts-node-dev inside the container detects the change and restarts
+        # No image rebuild — takes ~1 second
+        - action: sync
+          path: ./api/src
+          target: /app/src
+
+        # ACTION 2: rebuild
+        # When package.json or lockfile changes (new dep added),
+        # rebuild the entire image from scratch
+        # This is necessary because npm ci needs to run again
+        - action: rebuild
+          path: ./api/package.json
+
+        - action: rebuild
+          path: ./api/package-lock.json
+
+        # ACTION 3: sync+restart
+        # When tsconfig changes, sync the file then restart the container
+        # A full rebuild isn't needed but the process needs to restart
+        # to pick up the new compiler config
+        - action: sync+restart
+          path: ./api/tsconfig.json
+          target: /app/tsconfig.json

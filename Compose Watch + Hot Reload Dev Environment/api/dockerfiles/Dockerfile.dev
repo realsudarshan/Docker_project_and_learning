@@ -1,0 +1,24 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+COPY tsconfig.json ./
+
+# Install ALL deps — need ts-node-dev and typescript for live reload
+RUN npm ci
+
+# Add this — copy source for initial startup
+# compose watch will sync changes after this point
+COPY src/ ./src/
+
+
+# No COPY src/ here — source comes in via watch sync at runtime
+# No RUN npm run build — ts-node-dev compiles in memory on the fly
+
+EXPOSE 3000
+
+# ts-node-dev watches for file changes and restarts automatically
+# --respawn = restart on crash
+# --transpile-only = skip type checking for speed (types checked by editor)
+CMD ["npx", "ts-node-dev", "--respawn", "--transpile-only", "src/index.ts"]
