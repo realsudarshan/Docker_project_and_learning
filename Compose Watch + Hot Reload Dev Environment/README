@@ -222,3 +222,6 @@ If you see `- /app/node_modules` in a Compose volumes section, it's a workaround
 for bind mount limitations. It tells Docker to keep the container's `node_modules`
 and not overwrite it with the (likely empty) host directory. `compose watch`
 doesn't need this because it syncs specific files, not entire directories.
+
+![composewatchflow](composewatchflow.png)
+![devvsprodpipeline](devvsprodpipeline.png)
